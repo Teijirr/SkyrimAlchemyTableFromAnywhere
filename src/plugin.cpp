@@ -97,7 +97,7 @@ void LoadSettings()
 	ini.LoadFile(path.c_str());
 
 	// X key default
-	iKeyOpen = static_cast<std::uint32_t>(ini.GetDoubleValue("General", "iKeyOpen", 0x11));
+	iKeyOpen = static_cast<std::uint32_t>(ini.GetDoubleValue("General", "iKeyOpen", 0x25));
 }
 
 SKSEPluginLoad(const SKSE::LoadInterface* skse)
