@@ -16,6 +16,30 @@ void ExecuteConsoleCommand(const std::string& command, RE::TESObjectREFR* target
     }
 }
 
+bool IsSafeToOpenMenu()
+{
+    auto* ui = RE::UI::GetSingleton();
+    if (!ui) {
+        return false;
+    }
+
+    if (ui->GameIsPaused()) {
+        return false;
+    }
+
+    if (ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::MapMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::JournalMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME) ||
+        ui->IsMenuOpen(RE::Console::MENU_NAME) ||
+        ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)) {
+        return false;
+    }
+
+    return true;
+}
+
 RE::TESBoundObject* GetAlchemyLabBaseObject()
 {
     auto* base = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESFurniture>(0x000BAD0C, "Skyrim.esm");
@@ -87,9 +111,19 @@ public:
                 continue;
             }
 
+            if (!IsSafeToOpenMenu()) {
+                return RE::BSEventNotifyControl::kContinue;
+            }
+
             if (button->GetIDCode() == iKeyOpen) {
                 if (const auto tempRef = GetOrSpawnTempAlchemyLab()) {
-                    ExecuteConsoleCommand("Activate player", tempRef);
+                    std::thread([tempRef]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                        SKSE::GetTaskInterface()->AddTask([tempRef]() {
+                            ExecuteConsoleCommand("Activate player", tempRef);
+                        });
+                    }).detach();
                 }
                 else {
                     SKSE::log::warn("Failed to spawn temporary alchemy lab"sv);
@@ -121,9 +155,13 @@ public:
 
         if (a_event->menuName == "Crafting Menu"sv && !a_event->opening) {
             if (g_tempAlchemyLab) {
-                SKSE::GetTaskInterface()->AddTask([]() {
-                    DisableTempAlchemyLab();
-                });
+                std::thread([]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+                    SKSE::GetTaskInterface()->AddTask([]() {
+                        DisableTempAlchemyLab();
+                    });
+                }).detach();
             }
         }
 
@@ -170,7 +208,7 @@ void LoadSettings()
     const std::string path = "Data/SKSE/Plugins/" + std::string(plugin->GetName()) + ".ini";
     ini.LoadFile(path.c_str());
 
-    // X key default
+    // K key default
     iKeyOpen = static_cast<std::uint32_t>(ini.GetDoubleValue("General", "iKeyOpen", 0x25));
 }
 
