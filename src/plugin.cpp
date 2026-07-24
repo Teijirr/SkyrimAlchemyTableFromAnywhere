@@ -88,10 +88,6 @@ public:
             }
 
             if (button->GetIDCode() == iKeyOpen) {
-                if (g_tempAlchemyLab) {
-                    SKSE::log::warn("Temp alchemy lab already active, continuing but there may be issues"sv);
-                }
-
                 if (const auto tempRef = GetOrSpawnTempAlchemyLab()) {
                     ExecuteConsoleCommand("Activate player", tempRef);
                 }
