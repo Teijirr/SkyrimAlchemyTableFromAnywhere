@@ -16,14 +16,28 @@ void ExecuteConsoleCommand(const std::string& command, RE::TESObjectREFR* target
     }
 }
 
-bool IsSafeToOpenMenu()
+bool IsPlayerInBeastForm()
 {
-    auto* ui = RE::UI::GetSingleton();
-    if (!ui) {
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player) {
         return false;
     }
 
-    if (ui->GameIsPaused()) {
+    auto* currentRace = player->GetRace();
+    if (!currentRace) {
+        return false;
+    }
+
+    static auto* werewolfRace = RE::TESForm::LookupByEditorID<RE::TESRace>("WerewolfBeastRace");
+    static auto* vampireLordRace = RE::TESForm::LookupByEditorID<RE::TESRace>("DLC1VampireBeastRace");
+
+    return (werewolfRace && currentRace == werewolfRace) || (vampireLordRace && currentRace == vampireLordRace);
+}
+
+bool IsSafeToOpenMenu()
+{
+    auto* ui = RE::UI::GetSingleton();
+    if (!ui || ui->GameIsPaused() || IsPlayerInBeastForm()) {
         return false;
     }
 
@@ -117,13 +131,10 @@ public:
 
             if (button->GetIDCode() == iKeyOpen) {
                 if (const auto tempRef = GetOrSpawnTempAlchemyLab()) {
-                    std::thread([tempRef]() {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-                        SKSE::GetTaskInterface()->AddTask([tempRef]() {
-                            ExecuteConsoleCommand("Activate player", tempRef);
-                        });
-                    }).detach();
+                    tempRef->Load3D(false);
+                    SKSE::GetTaskInterface()->AddTask([tempRef]() {
+                        ExecuteConsoleCommand("Activate player", tempRef);
+                    });
                 }
                 else {
                     SKSE::log::warn("Failed to spawn temporary alchemy lab"sv);
