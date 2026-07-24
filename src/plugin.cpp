@@ -72,10 +72,13 @@ RE::TESObjectREFR* GetOrSpawnTempAlchemyLab()
         return nullptr;
     }
 
-    if (g_tempAlchemyLab) {
+    if (g_tempAlchemyLab && !g_tempAlchemyLab->IsDeleted()) {
         g_tempAlchemyLab->MoveTo(player);
         g_tempAlchemyLab->Enable(false);
         return g_tempAlchemyLab.get();
+    }
+    else {
+        g_tempAlchemyLab.reset();
     }
 
     auto* baseObj = GetAlchemyLabBaseObject();
@@ -95,7 +98,7 @@ RE::TESObjectREFR* GetOrSpawnTempAlchemyLab()
 
 void DisableTempAlchemyLab()
 {
-    if (g_tempAlchemyLab) {
+    if (g_tempAlchemyLab && !g_tempAlchemyLab->IsDeleted()) {
         g_tempAlchemyLab->Disable();
     }
 }
@@ -131,10 +134,34 @@ public:
 
             if (button->GetIDCode() == iKeyOpen) {
                 if (const auto tempRef = GetOrSpawnTempAlchemyLab()) {
-                    tempRef->Load3D(false);
-                    SKSE::GetTaskInterface()->AddTask([tempRef]() {
-                        ExecuteConsoleCommand("Activate player", tempRef);
+                    tempRef->Load3D(true);
+
+                    // Poll until Is3DLoaded() is true
+                    auto pollTask = std::make_shared<std::function<void(std::int32_t)>>();
+                    *pollTask = [pollTask](std::int32_t attemptsLeft) {
+                        if (!g_tempAlchemyLab || g_tempAlchemyLab->IsDeleted()) {
+                            SKSE::log::warn("Alchemy lab reference became invalid during load."sv);
+                            return;
+                        }
+
+                        if (g_tempAlchemyLab->Is3DLoaded()) {
+                            ExecuteConsoleCommand("Activate player", g_tempAlchemyLab.get());
+                        }
+                        else if (attemptsLeft > 0) {
+                            SKSE::GetTaskInterface()->AddTask([pollTask, attemptsLeft]() {
+                                (*pollTask)(attemptsLeft - 1);
+                            });
+                        }
+                        else {
+                            SKSE::log::warn("Timed out waiting for alchemy lab 3D to load."sv);
+                        }
+                    };
+
+                    // Start checking next frame (timeout set to ~60 frames / 1 sec)
+                    SKSE::GetTaskInterface()->AddTask([pollTask]() {
+                        (*pollTask)(60);
                     });
+
                 }
                 else {
                     SKSE::log::warn("Failed to spawn temporary alchemy lab"sv);
@@ -166,13 +193,11 @@ public:
 
         if (a_event->menuName == "Crafting Menu"sv && !a_event->opening) {
             if (g_tempAlchemyLab) {
-                std::thread([]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
+                if (a_event->menuName == RE::CraftingMenu::MENU_NAME && !a_event->opening) {
                     SKSE::GetTaskInterface()->AddTask([]() {
                         DisableTempAlchemyLab();
                     });
-                }).detach();
+                }
             }
         }
 
@@ -196,10 +221,13 @@ void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
     case SKSE::MessagingInterface::kPostLoad:
         break;
     case SKSE::MessagingInterface::kPreLoadGame:
+        g_tempAlchemyLab.reset();
         break;
     case SKSE::MessagingInterface::kPostLoadGame:
+        g_tempAlchemyLab.reset();
         break;
     case SKSE::MessagingInterface::kNewGame:
+        g_tempAlchemyLab.reset();
         break;
     case SKSE::MessagingInterface::kInputLoaded:
         RE::BSInputDeviceManager::GetSingleton()->AddEventSink(InputHandler::GetSingleton());
