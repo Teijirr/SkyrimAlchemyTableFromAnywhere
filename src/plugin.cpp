@@ -3,64 +3,139 @@
 
 static std::uint32_t iKeyOpen;
 
+static RE::NiPointer<RE::TESObjectREFR> g_tempAlchemyLab;
+
 void ExecuteConsoleCommand(const std::string& command, RE::TESObjectREFR* targetRef = nullptr)
 {
-	const auto scriptFactory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();
-	const auto script = scriptFactory ? scriptFactory->Create() : nullptr;
-	if (script) {
-		script->SetCommand(command);
-		script->CompileAndRun(targetRef);
-		delete script;
-	}
+    const auto scriptFactory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();
+    const auto script = scriptFactory ? scriptFactory->Create() : nullptr;
+    if (script) {
+        script->SetCommand(command);
+        script->CompileAndRun(targetRef);
+        delete script;
+    }
 }
 
-RE::TESObjectREFR* GetAlchemyTableRef()
+RE::TESBoundObject* GetAlchemyLabBaseObject()
 {
-	// Dragonsreach AlchemyLab
-	auto alchemyTable = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESObjectREFR>(0x0010D982, "Skyrim.esm");
-	return alchemyTable;
+    auto* base = RE::TESDataHandler::GetSingleton()->LookupForm<RE::TESFurniture>(0x000BAD0C, "Skyrim.esm");
+    if (!base) {
+        SKSE::log::warn("Could not look up alchemy lab base object"sv);
+        return nullptr;
+    }
+
+    return static_cast<RE::TESBoundObject*>(base);
+}
+
+RE::TESObjectREFR* GetOrSpawnTempAlchemyLab()
+{
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (!player) {
+        return nullptr;
+    }
+
+    if (g_tempAlchemyLab) {
+        g_tempAlchemyLab->MoveTo(player);
+        g_tempAlchemyLab->Enable(false);
+        return g_tempAlchemyLab.get();
+    }
+
+    auto* baseObj = GetAlchemyLabBaseObject();
+    if (!baseObj) {
+        return nullptr;
+    }
+
+    auto newRef = player->PlaceObjectAtMe(baseObj, false);
+    if (!newRef) {
+        SKSE::log::warn("PlaceObjectAtMe failed to spawn alchemy lab"sv);
+        return nullptr;
+    }
+
+    g_tempAlchemyLab = newRef;
+    return g_tempAlchemyLab.get();
+}
+
+void DisableTempAlchemyLab()
+{
+    if (g_tempAlchemyLab) {
+        g_tempAlchemyLab->Disable();
+    }
 }
 
 class InputHandler : public RE::BSTEventSink<RE::InputEvent*>
 {
 public:
-	static InputHandler* GetSingleton()
-	{
-		static InputHandler singleton;
-		return &singleton;
-	}
+    static InputHandler* GetSingleton()
+    {
+        static InputHandler singleton;
+        return &singleton;
+    }
 
-	RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
-	{
-		if (!a_event) {
-			return RE::BSEventNotifyControl::kContinue;
-		}
+    RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
+    {
+        if (!a_event) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
 
-		for (auto event = *a_event; event; event = event->next) {
-			if (event->eventType != RE::INPUT_EVENT_TYPE::kButton) {
-				continue;
-			}
+        for (auto event = *a_event; event; event = event->next) {
+            if (event->eventType != RE::INPUT_EVENT_TYPE::kButton) {
+                continue;
+            }
 
-			const auto button = event->AsButtonEvent();
-			if (!button || !button->IsDown() || button->device.get() != RE::INPUT_DEVICE::kKeyboard) {
-				continue;
-			}
+            const auto button = event->AsButtonEvent();
+            if (!button || !button->IsDown() || button->device.get() != RE::INPUT_DEVICE::kKeyboard) {
+                continue;
+            }
 
-			if (button->GetIDCode() == iKeyOpen) {
-				if (const auto targetRef = GetAlchemyTableRef()) {
-					ExecuteConsoleCommand("Activate player", targetRef);
-				}
-				else {
-					SKSE::log::warn("No target ref set yet"sv);
-				}
-			}
-		}
+            if (button->GetIDCode() == iKeyOpen) {
+                if (g_tempAlchemyLab) {
+                    SKSE::log::warn("Temp alchemy lab already active, continuing but there may be issues"sv);
+                }
 
-		return RE::BSEventNotifyControl::kContinue;
-	}
+                if (const auto tempRef = GetOrSpawnTempAlchemyLab()) {
+                    ExecuteConsoleCommand("Activate player", tempRef);
+                }
+                else {
+                    SKSE::log::warn("Failed to spawn temporary alchemy lab"sv);
+                }
+            }
+        }
+
+        return RE::BSEventNotifyControl::kContinue;
+    }
 
 private:
-	InputHandler() = default;
+    InputHandler() = default;
+};
+
+class MenuWatcher : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+{
+public:
+    static MenuWatcher* GetSingleton()
+    {
+        static MenuWatcher singleton;
+        return &singleton;
+    }
+
+    RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+    {
+        if (!a_event) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+        if (a_event->menuName == "Crafting Menu"sv && !a_event->opening) {
+            if (g_tempAlchemyLab) {
+                SKSE::GetTaskInterface()->AddTask([]() {
+                    DisableTempAlchemyLab();
+                });
+            }
+        }
+
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+private:
+    MenuWatcher() = default;
 };
 
 void OnDataLoaded()
@@ -69,47 +144,50 @@ void OnDataLoaded()
 
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
-	switch (a_msg->type) {
-	case SKSE::MessagingInterface::kDataLoaded:
-		OnDataLoaded();
-		break;
-	case SKSE::MessagingInterface::kPostLoad:
-		break;
-	case SKSE::MessagingInterface::kPreLoadGame:
-		break;
-	case SKSE::MessagingInterface::kPostLoadGame:
-		break;
-	case SKSE::MessagingInterface::kNewGame:
-		break;
-	case SKSE::MessagingInterface::kInputLoaded:
-		RE::BSInputDeviceManager::GetSingleton()->AddEventSink(InputHandler::GetSingleton());
-		break;
-	}
+    switch (a_msg->type) {
+    case SKSE::MessagingInterface::kDataLoaded:
+        OnDataLoaded();
+        break;
+    case SKSE::MessagingInterface::kPostLoad:
+        break;
+    case SKSE::MessagingInterface::kPreLoadGame:
+        break;
+    case SKSE::MessagingInterface::kPostLoadGame:
+        break;
+    case SKSE::MessagingInterface::kNewGame:
+        break;
+    case SKSE::MessagingInterface::kInputLoaded:
+        RE::BSInputDeviceManager::GetSingleton()->AddEventSink(InputHandler::GetSingleton());
+        if (auto* ui = RE::UI::GetSingleton()) {
+            ui->AddEventSink(MenuWatcher::GetSingleton());
+        }
+        break;
+    }
 }
 
 void LoadSettings()
 {
-	CSimpleIniA ini;
-	ini.SetUnicode();
+    CSimpleIniA ini;
+    ini.SetUnicode();
 
-	const auto* plugin = SKSE::PluginDeclaration::GetSingleton();
-	const std::string path = "Data/SKSE/Plugins/" + std::string(plugin->GetName()) + ".ini";
-	ini.LoadFile(path.c_str());
+    const auto* plugin = SKSE::PluginDeclaration::GetSingleton();
+    const std::string path = "Data/SKSE/Plugins/" + std::string(plugin->GetName()) + ".ini";
+    ini.LoadFile(path.c_str());
 
-	// X key default
-	iKeyOpen = static_cast<std::uint32_t>(ini.GetDoubleValue("General", "iKeyOpen", 0x25));
+    // X key default
+    iKeyOpen = static_cast<std::uint32_t>(ini.GetDoubleValue("General", "iKeyOpen", 0x25));
 }
 
 SKSEPluginLoad(const SKSE::LoadInterface* skse)
 {
-	SKSE::Init(skse);
-	SetupLog();
-	LoadSettings();
+    SKSE::Init(skse);
+    SetupLog();
+    LoadSettings();
 
-	auto messaging = SKSE::GetMessagingInterface();
-	if (!messaging->RegisterListener("SKSE", MessageHandler)) {
-		return false;
-	}
+    auto messaging = SKSE::GetMessagingInterface();
+    if (!messaging->RegisterListener("SKSE", MessageHandler)) {
+        return false;
+    }
 
-	return true;
+    return true;
 }
